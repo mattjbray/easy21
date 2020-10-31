@@ -7,32 +7,40 @@ Hello
     -help        Display this list of options
     --help       Display this list of options
 
-  $ dune exec -- test --seed 0 -n 2 -v
+  $ dune exec -- test --seed 0 -n 3 -v
   ==== Episode 1 ====
-  * player draws +3
-      dealer: 3 player: 4 (playing)
-  * player draws -3
+  * dealer draws +3
+  * player draws +1
       dealer: 3 player: 1 (playing)
-  * player draws -9
+  * hit -> player draws +3
+      dealer: 3 player: 4 (playing)
+  * hit -> player draws -3
+      dealer: 3 player: 1 (playing)
+  * hit -> player draws -9
       dealer: 3 player: -8 (loss)
-  values:
-    dealer: 3 player: -8 (loss) -> r:-1., n:1
-    dealer: 3 player: 1 (playing) -> r:-1., n:1
-    dealer: 3 player: 4 (playing) -> r:-1., n:1
   ==== Episode 2 ====
+  * dealer draws +4
   * player draws +9
+      dealer: 4 player: 9 (playing)
+  * hit -> player draws +9
       dealer: 4 player: 18 (playing)
-  * player draws +7
+  * hit -> player draws +7
       dealer: 4 player: 25 (loss)
-  values:
-    dealer: 3 player: -8 (loss) -> r:-1., n:1
-    dealer: 3 player: 1 (playing) -> r:-1., n:1
-    dealer: 3 player: 4 (playing) -> r:-1., n:1
-    dealer: 4 player: 18 (playing) -> r:-1., n:1
-    dealer: 4 player: 25 (loss) -> r:-1., n:1
+  ==== Episode 3 ====
+  * dealer draws +9
+  * player draws +8
+      dealer: 9 player: 8 (playing)
+  * stick -> player sticks
+      dealer: 9 player: 8 (sticking)
+  * hit -> dealer draws +2
+      dealer: 11 player: 8 (sticking)
+  * hit -> dealer draws +9
+      dealer: 20 player: 8 (sticking)
+  * stick -> dealer sticks
+      dealer: 20 player: 8 (loss)
   set hidden3d
   set dgrid3d 50,50 qnorm 2
   set xlabel 'Dealer showing'
-  set ylabel 'Player showing'
+  set ylabel 'Player sum'
   set zlabel 'Reward'
-  splot 'values.xyz' with lines notitle
+  splot 'hit_values.xyz' with lines, 'stick_values.xyz' with lines

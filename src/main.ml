@@ -91,22 +91,17 @@ module State = struct
         if is_bust state.dealer then finish_with Win state else state
     | Event.Dealer_sticks -> finish_with (outcome state) state
     | Event.No_event -> state
-
-  let update_log event state =
-    let () = CCFormat.eprintf "* %a@." Event.pp event in
-    let state = update event state in
-    let () = CCFormat.eprintf "    %a@." pp state in
-    state
-
-  let update ?(log = false) = if log then update_log else update
 end
 
 module Agent = struct
   (** Agent actions *)
   type action = Stick | Hit
 
-  type state = State.t
-  (** In this model, agents can view the full environment state *)
+  let pp_action fmt =
+    let open CCFormat in
+    function Stick -> fprintf fmt "stick" | Hit -> fprintf fmt "hit"
+
+  type state = { dealer_showing : int; player_sum : int }
 
   let dealer_policy ?st:_ state =
     if State.dealer state >= 17 then Stick else Hit
@@ -143,11 +138,17 @@ module Environment = struct
       let* values = r_value in
       pure { Event.color = Black; values })
 
-  let start ?st ?log state =
+  let start ?st ?(log = false) state =
     let dealer_draw = CCRandom.run ?st r_draw_black in
-    let state = state |> State.update ?log (Dealer_draws dealer_draw) in
+    let event = Event.Dealer_draws dealer_draw in
+    let () = if log then CCFormat.(eprintf "* %a@." Event.pp event) in
+    let state = state |> State.update event in
+
     let player_draw = CCRandom.run ?st r_draw_black in
-    let state = state |> State.update ?log (Player_draws player_draw) in
+    let event = Event.Player_draws player_draw in
+    let () = if log then CCFormat.(eprintf "* %a@." Event.pp event) in
+    let state = state |> State.update event in
+    let () = if log then CCFormat.eprintf "    %a@." State.pp state in
     state
 
   (** When the agent performs an action, what event do we actually get? *)
@@ -167,9 +168,15 @@ module Environment = struct
             Dealer_draws draw
         | Stick -> Dealer_sticks )
 
-  let step ?st ?log action state =
+  let step ?st ?(log = false) action state =
     let event = event_of_action ?st action state in
-    State.update ?log event state
+    let () =
+      if log then
+        CCFormat.(eprintf "* %a -> %a@." Agent.pp_action action Event.pp event)
+    in
+    let state = State.update event state in
+    let () = if log then CCFormat.eprintf "    %a@." State.pp state in
+    state
 
   let reward state =
     match State.mode state with
@@ -185,6 +192,12 @@ module State_map = CCMap.Make (struct
   let compare = Stdlib.compare
 end)
 
+module M = CCMap.Make (struct
+  type t = Agent.state * Agent.action
+
+  let compare = Stdlib.compare
+end)
+
 let pp_state_value fmt (reward, visits) =
   CCFormat.(fprintf fmt "@[r:%a, n:%i@]" float reward visits)
 
@@ -194,23 +207,27 @@ let pp_values fmt vs =
        pp_state_value)
       fmt vs)
 
+let pp_action_event fmt (action, event) =
+  let open CCFormat in
+  match (action, event) with
+  | Agent.Hit, (Event.Player_draws d | Dealer_draws d) ->
+      fprintf fmt "hits and draws %a" Event.pp_draw d
+  | Agent.Stick, (Event.Player_sticks | Dealer_sticks) -> fprintf fmt "sticks"
+  | _ -> fprintf fmt "%a -> %a" Agent.pp_action action Event.pp event
+
 let rec play_out_dealer ?st ?log state =
   match State.mode state with
   | Sticking ->
-      let act = Agent.dealer_policy ?st state in
-      let evt = Environment.event_of_action ?st act state in
-      let state = State.update ?log evt state in
-      play_out_dealer ?st state
+      let action = Agent.dealer_policy ?st state in
+      let state = Environment.step ?st ?log action state in
+      play_out_dealer ?st ?log state
   | Playing | Finished _ -> state
 
-let step ?st ?log policy state =
-  match State.mode state with
-  | Playing ->
-      let act = policy ?st state in
-      let evt = Environment.event_of_action ?st act state in
-      State.update ?log evt state
-  | Sticking -> play_out_dealer ?st state
-  | Finished _ -> state
+let step ?st ?log action state =
+  let state = Environment.step ?st ?log action state in
+  match action with
+  | Agent.Hit -> state
+  | Stick -> play_out_dealer ?st state ?log
 
 let update return = function
   | None -> Some (return, 1)
@@ -218,20 +235,27 @@ let update return = function
       let n = n + 1 in
       Some (prev_estimate +. ((return -. prev_estimate) /. float_of_int n), n)
 
-let episode ?st ?log ?(values = State_map.empty) policy =
-  let state = Environment.start ?st State.make in
+let episode ?st ?(log = false) ?(values = M.empty) policy =
+  let state = Environment.start ?st ~log State.make in
+  let dealer_showing = state.dealer in
   let rec go values state =
     match State.mode state with
     | Finished _ -> (values, Environment.reward state)
     | _ ->
-        let state = step ?st ?log policy state in
-        let values, return = go values state in
-        let values = values |> State_map.update state (update return) in
+        let action = policy ?st state in
+        let state' = step ?st ~log action state in
+        let values, return = go values state' in
+        let values =
+          values
+          |> M.update
+               ({ Agent.dealer_showing; player_sum = state.player }, action)
+               (update return)
+        in
         (values, return)
   in
   go values state
 
-let iter ?st ?(log = false) ?(values = State_map.empty) ~n policy =
+let iter ?st ?(log = false) ?(values = M.empty) ~n policy =
   let rec go i values =
     if i <= 0 then values
     else
@@ -239,9 +263,6 @@ let iter ?st ?(log = false) ?(values = State_map.empty) ~n policy =
         if log then CCFormat.(eprintf "==== Episode %i ====@." (n - i + 1))
       in
       let values, _ = episode ?st ~log ~values policy in
-      let () =
-        if log then CCFormat.(eprintf "@[<v 2>values:@ %a@]@." pp_values values)
-      in
       go (i - 1) values
   in
   go n values
