@@ -4,6 +4,7 @@ Hello
     -n <int>     Number of episodes
     --seed <int> Random seed
     -v           Be verbose
+    -f <fpath>   GNUPlot data file prefix
     -help        Display this list of options
     --help       Display this list of options
 
@@ -38,9 +39,3 @@ Hello
       dealer: 20 player: 8 (sticking)
   * stick -> dealer sticks
       dealer: 20 player: 8 (loss)
-  set hidden3d
-  set dgrid3d 50,50 qnorm 2
-  set xlabel 'Dealer showing'
-  set ylabel 'Player sum'
-  set zlabel 'Reward'
-  splot 'hit_values.xyz' with lines, 'stick_values.xyz' with lines

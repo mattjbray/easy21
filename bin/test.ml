@@ -6,6 +6,31 @@ let n = ref 1
 
 let verbose = ref false
 
+let data_prefix = ref None
+
+let gnuplot prefix vs =
+  let open CCFormat in
+  let hit_fname = sprintf "%s_hit.xyz" prefix in
+  let stick_fname = sprintf "%s_stick.xyz" prefix in
+  let () =
+    CCIO.with_out hit_fname (fun hit_chan ->
+        CCIO.with_out stick_fname (fun stick_chan ->
+            let fmt_hit = of_chan hit_chan in
+            let fmt_stick = of_chan stick_chan in
+            vs
+            |> M.iter (fun (s, a) (r, _n) ->
+                   let fmt = if a = Agent.Hit then fmt_hit else fmt_stick in
+                   fprintf fmt "%i %i %a@." s.dealer_showing s.player_sum float
+                     r)))
+  in
+  let p = printf in
+  p "set hidden3d@.";
+  p "set dgrid3d 50,50 qnorm 2@.";
+  p "set xlabel 'Dealer showing'@.";
+  p "set ylabel 'Player sum'@.";
+  p "set zlabel 'Reward'@.";
+  p "splot '%s' with lines, '%s' with lines@." hit_fname stick_fname
+
 let () =
   Arg.parse
     (Arg.align
@@ -13,6 +38,9 @@ let () =
          ("-n", Set_int n, "<int> Number of episodes");
          ("--seed", Int (fun i -> seed := Some i), "<int> Random seed");
          ("-v", Set verbose, " Be verbose");
+         ( "-f",
+           String (fun s -> data_prefix := Some s),
+           "<fpath> GNUPlot data file prefix" );
        ])
     (fun _ -> raise (Arg.Bad "no positional args please."))
     "Easy 21"
@@ -24,27 +52,4 @@ let () =
            Random.State.make [| seed |])
   in
   let vs = iter ~st ~log:!verbose ~n:!n Agent.player_policy in
-  let open CCFormat in
-  let () =
-    CCIO.with_out "hit_values.xyz" (fun out_chan ->
-        let fmt = of_chan out_chan in
-        vs
-        |> M.iter (fun (s, a) (r, _n) ->
-               if a = Agent.Hit then
-                 fprintf fmt "%i %i %a@." s.dealer_showing s.player_sum float r))
-  in
-  let () =
-    CCIO.with_out "stick_values.xyz" (fun out_chan ->
-        let fmt = of_chan out_chan in
-        vs
-        |> M.iter (fun (s, a) (r, _n) ->
-               if a = Agent.Stick then
-                 fprintf fmt "%i %i %a@." s.dealer_showing s.player_sum float r))
-  in
-  let p = printf in
-  p "set hidden3d@.";
-  p "set dgrid3d 50,50 qnorm 2@.";
-  p "set xlabel 'Dealer showing'@.";
-  p "set ylabel 'Player sum'@.";
-  p "set zlabel 'Reward'@.";
-  p "splot 'hit_values.xyz' with lines, 'stick_values.xyz' with lines@."
+  match !data_prefix with None -> () | Some pre -> gnuplot pre vs
