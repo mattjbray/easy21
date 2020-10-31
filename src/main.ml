@@ -1,13 +1,13 @@
 module Event = struct
   type color = Red | Black
 
-  type draw = { color : color; value : int }
+  type draw = { color : color; values : int }
 
   let pp_draw fmt d =
     let open CCFormat in
     let c = match d.color with Red -> "Red" | Black -> "Black" in
     let op = match d.color with Red -> "-" | Black -> "+" in
-    fprintf fmt "%s%a" op (with_color c int) d.value
+    fprintf fmt "%s%a" op (with_color c int) d.values
 
   (** Environment events *)
   type t =
@@ -52,7 +52,7 @@ module State = struct
 
   let pp fmt s =
     let open CCFormat in
-    fprintf fmt "@[<v>";
+    fprintf fmt "@[";
     fprintf fmt "dealer: %a@ " int s.dealer;
     fprintf fmt "player: %a (%a)" int s.player pp_mode s.mode;
     fprintf fmt "@]"
@@ -69,7 +69,7 @@ module State = struct
 
   let draw (draw : Event.draw) sum =
     let op = match draw.color with Black -> ( + ) | Red -> ( - ) in
-    op sum draw.value
+    op sum draw.values
 
   let is_bust sum = sum > 21 || sum < 1
 
@@ -132,14 +132,14 @@ module Environment = struct
   let r_draw =
     CCRandom.(
       let* color = r_color in
-      let* value = r_value in
-      pure { Event.color; value })
+      let* values = r_value in
+      pure { Event.color; values })
 
   (** To start, both players draw a Black card. *)
   let r_draw_black =
     CCRandom.(
-      let* value = r_value in
-      pure { Event.color = Black; value })
+      let* values = r_value in
+      pure { Event.color = Black; values })
 
   let start ?st state =
     let dealer_draw = CCRandom.run ?st r_draw_black in
@@ -171,10 +171,10 @@ module Environment = struct
 
   let reward state =
     match State.mode state with
-    | Finished Win -> Some 1
-    | Finished Draw -> Some 0
-    | Finished Loss -> Some (-1)
-    | _ -> None
+    | Finished Win -> 1.0
+    | Finished Draw -> 0.0
+    | Finished Loss -> -1.0
+    | _ -> 0.0
 end
 
 module State_map = CCMap.Make (struct
@@ -182,6 +182,15 @@ module State_map = CCMap.Make (struct
 
   let compare = Stdlib.compare
 end)
+
+let pp_state_value fmt (reward, visits) =
+  CCFormat.(fprintf fmt "@[r:%a, n:%i@]" float reward visits)
+
+let pp_values fmt vs =
+  CCFormat.(
+    (State_map.pp ~pp_sep:(return "@,") ~pp_arrow:(return " -> ") State.pp
+       pp_state_value)
+      fmt vs)
 
 let rec play_out_dealer ?st state =
   match State.mode state with
@@ -201,13 +210,32 @@ let step ?st policy state =
   | Sticking -> play_out_dealer ?st state
   | Finished _ -> state
 
-let episode ?st policy =
+let update return = function
+  | None -> Some (return, 1)
+  | Some (prev_estimate, n) ->
+      let n = n + 1 in
+      Some (prev_estimate +. ((return -. prev_estimate) /. float_of_int n), n)
+
+let episode ?st ?(values = State_map.empty) policy =
   let state = Environment.start ?st State.make in
-  let rec go state =
+  let rec go values state =
     match State.mode state with
-    | Finished _ -> state
+    | Finished _ -> (values, Environment.reward state)
     | _ ->
         let state = step ?st policy state in
-        go state
+        let values, return = go values state in
+        let values = values |> State_map.update state (update return) in
+        (values, return)
   in
-  go state
+  go values state
+
+let iter ?st ?(values = State_map.empty) ~n policy =
+  let rec go i values =
+    if i <= 0 then values
+    else
+      let () = CCFormat.(printf "==== Episode %i ====@." (n - i + 1)) in
+      let values, _ = episode ?st ~values policy in
+      let () = CCFormat.(printf "@[<v 2>values:@ %a@]@." pp_values values) in
+      go (i - 1) values
+  in
+  go n values
