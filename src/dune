@@ -1,0 +1,3 @@
+(library
+ (name easy21)
+ (libraries containers))
