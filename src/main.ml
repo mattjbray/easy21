@@ -103,45 +103,88 @@ module Agent = struct
     let open CCFormat in
     function Stick -> fprintf fmt "stick" | Hit -> fprintf fmt "hit"
 
-  type state = { dealer_showing : int; player_sum : int }
+  type state = { other_player_showing : int; my_sum : int }
 
-  let dealer_policy ?st:_ state =
-    if State.dealer state >= 17 then Stick else Hit
+  let observe_dealer s =
+    { other_player_showing = State.player s; my_sum = State.dealer s }
 
-  let player_policy ?st _state =
+  let observe_player s =
+    { other_player_showing = State.dealer s; my_sum = State.player s }
+
+  module V = CCMap.Make (struct
+    type t = state
+
+    let compare = Stdlib.compare
+  end)
+
+  module Q = CCMap.Make (struct
+    type t = action
+
+    let compare = Stdlib.compare
+  end)
+
+  type q = { visited : int; reward : float }
+
+  type v = { visited : int; qs : q Q.t }
+
+  type values = v V.t
+
+  let update_q reward = function
+    | None -> Some { visited = 1; reward }
+    | Some { visited; reward = prev_estimate } ->
+        let visited = visited + 1 in
+        Some
+          {
+            visited;
+            reward =
+              prev_estimate
+              +. ((reward -. prev_estimate) /. float_of_int visited);
+          }
+
+  let update_v action reward = function
+    | None ->
+        Some { visited = 1; qs = Q.singleton action { visited = 1; reward } }
+    | Some v ->
+        Some
+          {
+            visited = v.visited + 1;
+            qs = v.qs |> Q.update action (update_q reward);
+          }
+
+  let update state action reward vs =
+    vs |> V.update state (update_v action reward)
+
+  type policy = ?st:CCRandom.state -> values -> state -> action
+
+  let dealer_policy : policy =
+   fun ?st:_ _values state -> if state.my_sum >= 17 then Stick else Hit
+
+  let rand_policy ?st _values _state =
     CCRandom.(
       (let+ i = int 3 in
        if i = 0 then Stick else Hit)
       |> run ?st)
 
-  module Q = CCMap.Make (struct
-    type t = state * action
-
-    let compare = Stdlib.compare
-  end)
-
-  let update_point return = function
-    | None -> Some (return, 1)
-    | Some (prev_estimate, n) ->
-        let n = n + 1 in
-        Some (prev_estimate +. ((return -. prev_estimate) /. float_of_int n), n)
-
-  let update state action reward q =
-    q |> Q.update (state, action) (update_point reward)
-
-  let epsilon_greedy ~e ?st ~q (state : state) : action =
+  let epsilon_greedy ~n_0 : policy =
+   fun ?st (vs : values) (state : state) ->
+    let v = vs |> V.get_or ~default:{ visited = 0; qs = Q.empty } state in
+    let n_0 = float_of_int n_0 in
+    let epsilon = n_0 /. (n_0 +. float_of_int v.visited) in
     let r =
       CCRandom.(
         let* f = float 1. in
-        if f > e then choose_exn (all_actions |> CCList.map pure)
+        if f < epsilon then choose_exn (all_actions |> CCList.map pure)
         else
           let action_rewards =
             all_actions
             |> CCList.map (fun action ->
-                   (action, q |> Q.get_or ~default:(0.0, 0) (state, action)))
+                   ( action,
+                     v.qs
+                     |> Q.get_or ~default:{ visited = 0; reward = 0.0 } action
+                   ))
           in
           action_rewards
-          |> CCList.sort (fun (_, (r1, _)) (_, (r2, _)) -> compare r1 r2)
+          |> CCList.sort (fun (_, q1) (_, q2) -> compare q1.reward q2.reward)
           |> CCList.hd |> fst |> pure)
     in
     CCRandom.run ?st r
@@ -231,45 +274,47 @@ let pp_action_event fmt (action, event) =
   | Agent.Stick, (Event.Player_sticks | Dealer_sticks) -> fprintf fmt "sticks"
   | _ -> fprintf fmt "%a -> %a" Agent.pp_action action Event.pp event
 
-let rec play_out_dealer ?st ?log state =
+let rec play_out_dealer ?st ?log values state =
   match State.mode state with
   | Sticking ->
-      let action = Agent.dealer_policy ?st state in
+      let agent_state = Agent.observe_dealer state in
+      let action = Agent.dealer_policy ?st values agent_state in
       let state = Environment.step ?st ?log action state in
-      play_out_dealer ?st ?log state
+      play_out_dealer ?st ?log values state
   | Playing | Finished _ -> state
 
-let step ?st ?log action state =
+let step ?st ?log action values state =
   let state = Environment.step ?st ?log action state in
   match action with
   | Agent.Hit -> state
-  | Stick -> play_out_dealer ?st state ?log
+  | Stick -> play_out_dealer ?st values state ?log
 
-let episode ?st ?(log = false) ?(q = Agent.Q.empty) policy =
+let episode ?st ?(log = false) ?(values = Agent.V.empty) (policy : Agent.policy)
+    =
   let state = Environment.start ?st ~log State.make in
-  let dealer_showing = state.dealer in
-  let rec go q state =
+  (* let other_player_showing = state.dealer in *)
+  let rec go values state =
     match State.mode state with
-    | Finished _ -> (q, Environment.reward state)
+    | Finished _ -> (values, Environment.reward state)
     | _ ->
-        let agent_state = { Agent.dealer_showing; player_sum = state.player } in
-        let action = policy ?st ~q agent_state in
-        let state = step ?st ~log action state in
-        let q, return = go q state in
-        let q = q |> Agent.update agent_state action return in
-        (q, return)
+        let agent_state = Agent.observe_player state in
+        let action = policy ?st values agent_state in
+        let state = step ?st ~log action values state in
+        let values, return = go values state in
+        let values = values |> Agent.update agent_state action return in
+        (values, return)
   in
-  go q state
+  go values state
 
 (** Evaluate the action-value function q for this policy. *)
-let evaluate ?st ?(log = false) ?(q = Agent.Q.empty) ~n policy =
-  let rec go i q =
-    if i <= 0 then q
+let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ~n policy =
+  let rec go i values =
+    if i <= 0 then values
     else
       let () =
         if log then CCFormat.(eprintf "==== Episode %i ====@." (n - i + 1))
       in
-      let q, _ = episode ?st ~log ~q policy in
-      go (i - 1) q
+      let values, _ = episode ?st ~log ~values policy in
+      go (i - 1) values
   in
-  go n q
+  go n values

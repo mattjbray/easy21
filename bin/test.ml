@@ -18,10 +18,14 @@ let gnuplot prefix vs =
             let fmt_hit = of_chan hit_chan in
             let fmt_stick = of_chan stick_chan in
             vs
-            |> Agent.Q.iter (fun (s, a) (r, _n) ->
-                   let fmt = if a = Agent.Hit then fmt_hit else fmt_stick in
-                   fprintf fmt "%i %i %a@." s.dealer_showing s.player_sum float
-                     r)))
+            |> Agent.V.iter (fun s (v : Agent.v) ->
+                   v.qs
+                   |> Agent.Q.iter (fun a (q : Agent.q) ->
+                          let fmt =
+                            if a = Agent.Hit then fmt_hit else fmt_stick
+                          in
+                          fprintf fmt "%i %i %a@." s.other_player_showing
+                            s.my_sum float q.reward))))
   in
   let p = printf in
   p "set hidden3d@.";
@@ -52,5 +56,5 @@ let () =
     |> CCOpt.map_lazy Random.State.make_self_init (fun seed ->
            Random.State.make [| seed |])
   in
-  let vs = evaluate ~st ~log:!verbose ~n:!n (Agent.epsilon_greedy ~e:0.5) in
+  let vs = evaluate ~st ~log:!verbose ~n:!n (Agent.epsilon_greedy ~n_0:100) in
   match !data_prefix with None -> () | Some pre -> gnuplot pre vs
