@@ -22,43 +22,34 @@ Hello
       dealer: 17 player: 1 (sticking)
   * stick -> dealer sticks
       dealer: 17 player: 1 (loss)
-  update showing:3 sum:1 stick (-1.000) selected:1 0.000 -> -1.000
+  + choose random (ε 1.000)
   win rate: 0.0% (after 1 episodes)
   ==== Episode 2 ====
-  * dealer draws +8
-  * player draws +9
-      dealer: 8 player: 9 (playing)
-  + choose random (ε 1.000)
-  * hit -> player draws +9
-      dealer: 8 player: 18 (playing)
+  * dealer draws +9
+  * player draws +6
+      dealer: 9 player: 6 (playing)
   + choose random (ε 1.000)
   * stick -> player sticks
-      dealer: 8 player: 18 (sticking)
+      dealer: 9 player: 6 (sticking)
+  * hit -> dealer draws +7
+      dealer: 16 player: 6 (sticking)
   * hit -> dealer draws +8
-      dealer: 16 player: 18 (sticking)
-  * hit -> dealer draws -3
-      dealer: 13 player: 18 (sticking)
-  * hit -> dealer draws +9
-      dealer: 22 player: 18 (win)
-  update showing:8 sum:18 stick (1.000) selected:1 0.000 -> 1.000
-  update showing:8 sum:9 hit (1.000) selected:1 0.000 -> 1.000
+      dealer: 24 player: 6 (win)
+  + choose random (ε 1.000)
   win rate: 50.0% (after 2 episodes)
   ==== Episode 3 ====
   * dealer draws +9
   * player draws +9
       dealer: 9 player: 9 (playing)
   + choose random (ε 1.000)
+  * hit -> player draws +1
+      dealer: 9 player: 10 (playing)
+  + choose random (ε 1.000)
   * stick -> player sticks
-      dealer: 9 player: 9 (sticking)
-  * hit -> dealer draws +2
-      dealer: 11 player: 9 (sticking)
-  * hit -> dealer draws -9
-      dealer: 2 player: 9 (sticking)
+      dealer: 9 player: 10 (sticking)
   * hit -> dealer draws +9
-      dealer: 11 player: 9 (sticking)
-  * hit -> dealer draws +6
-      dealer: 17 player: 9 (sticking)
+      dealer: 18 player: 10 (sticking)
   * stick -> dealer sticks
-      dealer: 17 player: 9 (loss)
-  update showing:9 sum:9 stick (-1.000) selected:1 0.000 -> -1.000
+      dealer: 18 player: 10 (loss)
+  + choose random (ε 0.990)
   win rate: 33.3% (after 3 episodes)

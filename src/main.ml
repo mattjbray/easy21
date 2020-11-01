@@ -127,43 +127,35 @@ module Agent = struct
     let compare = Stdlib.compare
   end)
 
-  type q = { selected : int; reward : float }
+  type q = { selections : int; reward : float }
 
-  let make_q = { selected = 0; reward = 0.0 }
+  let make_q = { selections = 0; reward = 0.0 }
 
-  type v = { visited : int; qs : q Q.t }
+  type v = { visits : int; qs : q Q.t }
 
-  let make_v = { visited = 0; qs = Q.empty }
+  let make_v = { visits = 0; qs = Q.empty }
 
   type values = v V.t
 
-  let update_q ?(log = false) reward q =
-    let { selected; reward = prev_estimate } =
-      match q with None -> make_q | Some q -> q
-    in
-    let selected = selected + 1 in
-    let alpha = 1. /. float_of_int selected in
-    let reward = prev_estimate +. (alpha *. (reward -. prev_estimate)) in
-    ( if log then
-      CCFormat.(
-        eprintf "selected:%i %a -> %a@." selected float3 prev_estimate float3
-          reward) );
-    Some { selected; reward }
+  let update_counts_with state action f values =
+    values
+    |> V.update state (fun v ->
+           let v = v |> CCOpt.get_or ~default:make_v in
+           Some
+             {
+               visits = v.visits + 1;
+               qs =
+                 v.qs
+                 |> Q.update action (fun q ->
+                        let q = q |> CCOpt.get_or ~default:make_q in
+                        let q = { q with selections = q.selections + 1 } in
+                        Some (f q));
+             })
 
-  let update_v ?log action reward v =
-    let v = v |> CCOpt.get_or ~default:make_v in
-    Some
-      {
-        visited = v.visited + 1;
-        qs = v.qs |> Q.update action (update_q ?log reward);
-      }
-
-  let update ?(log = false) state action reward vs =
-    ( if log then
-      CCFormat.(
-        eprintf "update %a %a (%a) " pp_state state pp_action action float3
-          reward) );
-    vs |> V.update state (update_v ~log action reward)
+  let lookup_reward state action values =
+    let v = values |> V.get_or ~default:make_v state in
+    let q = v.qs |> Q.get_or ~default:make_q action in
+    q.reward
 
   type policy = ?st:CCRandom.state -> ?log:bool -> values -> state -> action
 
@@ -179,7 +171,7 @@ module Agent = struct
    fun ?st ?(log = false) (vs : values) (state : state) ->
     let v = vs |> V.get_or ~default:make_v state in
     let n_0 = float_of_int n_0 in
-    let epsilon = n_0 /. (n_0 +. float_of_int v.visited) in
+    let epsilon = n_0 /. (n_0 +. float_of_int v.visits) in
     let r =
       CCRandom.(
         let* f = float 1. in
@@ -307,21 +299,110 @@ let step ?st ?log ?dealer_policy action values state =
   | Agent.Hit -> state
   | Stick -> play_out_dealer ?dealer_policy ?st values state ?log
 
-let episode ?st ?log ?(values = Agent.V.empty) ?dealer_policy
-    (policy : Agent.policy) =
-  let state = Environment.start ?st ?log State.make in
-  let rec go values state =
-    match State.mode state with
-    | Finished _ -> (values, Environment.reward state)
-    | _ ->
-        let agent_state = Agent.observe_player state in
-        let action = policy ?st ?log values agent_state in
-        let state = step ?st ?log ?dealer_policy action values state in
-        let values, reward = go values state in
-        let values = values |> Agent.update ?log agent_state action reward in
-        (values, reward)
-  in
-  go values state
+module Monte_carlo = struct
+  let update_q ?(log = false) reward (q : Agent.q) =
+    let alpha = 1. /. float_of_int q.selections in
+    let reward = q.reward +. (alpha *. (reward -. q.reward)) in
+    ( if log then
+      CCFormat.(
+        eprintf "selections:%i %a -> %a@." q.selections float3 q.reward float3
+          reward) );
+    { q with reward }
+
+  let update ?(log = false) state action reward vs =
+    ( if log then
+      CCFormat.(
+        eprintf "update %a %a (%a) " Agent.pp_state state Agent.pp_action action
+          float3 reward) );
+    vs |> Agent.update_counts_with state action (update_q ~log reward)
+
+  let episode ?st ?log ?(values = Agent.V.empty) ?dealer_policy
+      (policy : Agent.policy) =
+    let state = Environment.start ?st ?log State.make in
+    let rec go values state =
+      match State.mode state with
+      | Finished _ -> (values, Environment.reward state)
+      | _ ->
+          let agent_state = Agent.observe_player state in
+          let action = policy ?st ?log values agent_state in
+          let state' = step ?st ?log ?dealer_policy action values state in
+          let values, reward = go values state' in
+          let values = values |> update ?log agent_state action reward in
+          (values, reward)
+    in
+    go values state
+end
+
+module Sarsa = struct
+  module Q = CCMap.Make (struct
+    type t = Agent.state * Agent.action
+
+    let compare = Stdlib.compare
+  end)
+
+  let update ~gamma ~lambda (state, action) reward (state', action') values
+      eligability_traces =
+    let agent_state = Agent.observe_player state in
+    let q = values |> Agent.lookup_reward agent_state action in
+    let agent_state' = Agent.observe_player state' in
+    let q' = values |> Agent.lookup_reward agent_state' action' in
+    let delta = reward +. (gamma *. q') -. q in
+    let eligability_traces =
+      eligability_traces
+      |> Q.update (agent_state, action) (function
+           | None -> Some 1.
+           | Some e -> Some (e +. 1.))
+    in
+    (* Update visits and selections counts for this state-action. *)
+    let values =
+      values |> Agent.update_counts_with agent_state action CCFun.id
+    in
+    (* Update reward values for all state-actions. *)
+    let values =
+      values
+      |> Agent.V.mapi (fun state (v : Agent.v) ->
+             {
+               v with
+               qs =
+                 v.qs
+                 |> Agent.Q.mapi (fun action (q : Agent.q) ->
+                        let eligability =
+                          eligability_traces
+                          |> Q.get_or ~default:0. (state, action)
+                        in
+                        let alpha = 1. /. float_of_int q.selections in
+                        {
+                          q with
+                          reward = q.reward +. (alpha *. delta *. eligability);
+                        });
+             })
+    in
+    let eligability_traces =
+      eligability_traces |> Q.map (fun e -> gamma *. lambda *. e)
+    in
+    (values, eligability_traces)
+
+  let episode ?st ?log ~gamma ~lambda ?(values = Agent.V.empty) ?dealer_policy
+      (policy : Agent.policy) =
+    let state = Environment.start ?st ?log State.make in
+    let eligability_traces = Q.empty in
+    let agent_state = Agent.observe_player state in
+    let action = policy ?st ?log values agent_state in
+    let rec go eligability_traces values action state =
+      match State.mode state with
+      | Finished _ -> (values, Environment.reward state)
+      | _ ->
+          let state' = step ?st ?log ?dealer_policy action values state in
+          let reward = Environment.reward state' in
+          let action' = policy ?st ?log values agent_state in
+          let values, eligability_traces =
+            update ~gamma ~lambda (state, action) reward (state', action')
+              values eligability_traces
+          in
+          go eligability_traces values action' state'
+    in
+    go eligability_traces values action state
+end
 
 (** Evaluate the action-value function q for this policy. *)
 let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ?dealer_policy ~n
@@ -334,7 +415,13 @@ let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ?dealer_policy ~n
       let () =
         if log then CCFormat.(eprintf "==== Episode %i ====@." n_episodes)
       in
-      let values, r = episode ?st ~log ~values ?dealer_policy policy in
+      (* let values, r = *)
+      (*   Monte_carlo.episode ?st ~log ~values ?dealer_policy policy *)
+      (* in *)
+      let values, r =
+        Sarsa.episode ~gamma:1. ~lambda:0.3 ?st ~log ~values ?dealer_policy
+          policy
+      in
       let () =
         let win = if r > 0. then 1. else 0. in
         let alpha =

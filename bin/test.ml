@@ -38,7 +38,7 @@ let gnuplot prefix vs =
                 |> Agent.V.iter (fun s (v : Agent.v) ->
                        let () =
                          fprintf fmt_visits "%i %i %i@." s.other_player_showing
-                           s.my_sum v.visited
+                           s.my_sum v.visits
                        in
                        v.qs
                        |> Agent.Q.iter (fun a (q : Agent.q) ->
