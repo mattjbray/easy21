@@ -18,7 +18,7 @@ let gnuplot prefix vs =
             let fmt_hit = of_chan hit_chan in
             let fmt_stick = of_chan stick_chan in
             vs
-            |> M.iter (fun (s, a) (r, _n) ->
+            |> Agent.Q.iter (fun (s, a) (r, _n) ->
                    let fmt = if a = Agent.Hit then fmt_hit else fmt_stick in
                    fprintf fmt "%i %i %a@." s.dealer_showing s.player_sum float
                      r)))
@@ -29,7 +29,8 @@ let gnuplot prefix vs =
   p "set xlabel 'Dealer showing'@.";
   p "set ylabel 'Player sum'@.";
   p "set zlabel 'Reward'@.";
-  p "splot '%s' with lines, '%s' with lines@." hit_fname stick_fname
+  p "splot '%s' with lines title 'Hit', '%s' with lines title 'Stick'@."
+    hit_fname stick_fname
 
 let () =
   Arg.parse
@@ -51,5 +52,5 @@ let () =
     |> CCOpt.map_lazy Random.State.make_self_init (fun seed ->
            Random.State.make [| seed |])
   in
-  let vs = iter ~st ~log:!verbose ~n:!n Agent.player_policy in
+  let vs = evaluate ~st ~log:!verbose ~n:!n (Agent.epsilon_greedy ~e:0.5) in
   match !data_prefix with None -> () | Some pre -> gnuplot pre vs

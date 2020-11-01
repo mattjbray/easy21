@@ -13,29 +13,35 @@ Hello
   * dealer draws +3
   * player draws +1
       dealer: 3 player: 1 (playing)
-  * hit -> player draws +3
-      dealer: 3 player: 4 (playing)
-  * hit -> player draws -3
-      dealer: 3 player: 1 (playing)
-  * hit -> player draws -9
-      dealer: 3 player: -8 (loss)
-  ==== Episode 2 ====
-  * dealer draws +4
-  * player draws +9
-      dealer: 4 player: 9 (playing)
-  * hit -> player draws +9
-      dealer: 4 player: 18 (playing)
-  * hit -> player draws +7
-      dealer: 4 player: 25 (loss)
-  ==== Episode 3 ====
-  * dealer draws +9
-  * player draws +8
-      dealer: 9 player: 8 (playing)
   * stick -> player sticks
-      dealer: 9 player: 8 (sticking)
-  * hit -> dealer draws +2
-      dealer: 11 player: 8 (sticking)
+      dealer: 3 player: 1 (sticking)
+  * hit -> dealer draws +4
+      dealer: 7 player: 1 (sticking)
+  * hit -> dealer draws -3
+      dealer: 4 player: 1 (sticking)
+  * hit -> dealer draws +8
+      dealer: 12 player: 1 (sticking)
+  * hit -> dealer draws +4
+      dealer: 16 player: 1 (sticking)
+  * hit -> dealer draws +6
+      dealer: 22 player: 1 (win)
+  ==== Episode 2 ====
+  * dealer draws +10
+  * player draws +9
+      dealer: 10 player: 9 (playing)
+  * stick -> player sticks
+      dealer: 10 player: 9 (sticking)
   * hit -> dealer draws +9
-      dealer: 20 player: 8 (sticking)
+      dealer: 19 player: 9 (sticking)
   * stick -> dealer sticks
-      dealer: 20 player: 8 (loss)
+      dealer: 19 player: 9 (loss)
+  ==== Episode 3 ====
+  * dealer draws +8
+  * player draws +1
+      dealer: 8 player: 1 (playing)
+  * stick -> player sticks
+      dealer: 8 player: 1 (sticking)
+  * hit -> dealer draws +9
+      dealer: 17 player: 1 (sticking)
+  * stick -> dealer sticks
+      dealer: 17 player: 1 (loss)

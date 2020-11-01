@@ -97,6 +97,8 @@ module Agent = struct
   (** Agent actions *)
   type action = Stick | Hit
 
+  let all_actions = [ Stick; Hit ]
+
   let pp_action fmt =
     let open CCFormat in
     function Stick -> fprintf fmt "stick" | Hit -> fprintf fmt "hit"
@@ -111,6 +113,38 @@ module Agent = struct
       (let+ i = int 3 in
        if i = 0 then Stick else Hit)
       |> run ?st)
+
+  module Q = CCMap.Make (struct
+    type t = state * action
+
+    let compare = Stdlib.compare
+  end)
+
+  let update_point return = function
+    | None -> Some (return, 1)
+    | Some (prev_estimate, n) ->
+        let n = n + 1 in
+        Some (prev_estimate +. ((return -. prev_estimate) /. float_of_int n), n)
+
+  let update state action reward q =
+    q |> Q.update (state, action) (update_point reward)
+
+  let epsilon_greedy ~e ?st ~q (state : state) : action =
+    let r =
+      CCRandom.(
+        let* f = float 1. in
+        if f > e then choose_exn (all_actions |> CCList.map pure)
+        else
+          let action_rewards =
+            all_actions
+            |> CCList.map (fun action ->
+                   (action, q |> Q.get_or ~default:(0.0, 0) (state, action)))
+          in
+          action_rewards
+          |> CCList.sort (fun (_, (r1, _)) (_, (r2, _)) -> compare r1 r2)
+          |> CCList.hd |> fst |> pure)
+    in
+    CCRandom.run ?st r
 end
 
 module Environment = struct
@@ -186,26 +220,8 @@ module Environment = struct
     | _ -> 0.0
 end
 
-module State_map = CCMap.Make (struct
-  type t = State.t
-
-  let compare = Stdlib.compare
-end)
-
-module M = CCMap.Make (struct
-  type t = Agent.state * Agent.action
-
-  let compare = Stdlib.compare
-end)
-
 let pp_state_value fmt (reward, visits) =
   CCFormat.(fprintf fmt "@[r:%a, n:%i@]" float reward visits)
-
-let pp_values fmt vs =
-  CCFormat.(
-    (State_map.pp ~pp_sep:(return "@,") ~pp_arrow:(return " -> ") State.pp
-       pp_state_value)
-      fmt vs)
 
 let pp_action_event fmt (action, event) =
   let open CCFormat in
@@ -229,40 +245,31 @@ let step ?st ?log action state =
   | Agent.Hit -> state
   | Stick -> play_out_dealer ?st state ?log
 
-let update return = function
-  | None -> Some (return, 1)
-  | Some (prev_estimate, n) ->
-      let n = n + 1 in
-      Some (prev_estimate +. ((return -. prev_estimate) /. float_of_int n), n)
-
-let episode ?st ?(log = false) ?(values = M.empty) policy =
+let episode ?st ?(log = false) ?(q = Agent.Q.empty) policy =
   let state = Environment.start ?st ~log State.make in
   let dealer_showing = state.dealer in
-  let rec go values state =
+  let rec go q state =
     match State.mode state with
-    | Finished _ -> (values, Environment.reward state)
+    | Finished _ -> (q, Environment.reward state)
     | _ ->
-        let action = policy ?st state in
-        let state' = step ?st ~log action state in
-        let values, return = go values state' in
-        let values =
-          values
-          |> M.update
-               ({ Agent.dealer_showing; player_sum = state.player }, action)
-               (update return)
-        in
-        (values, return)
+        let agent_state = { Agent.dealer_showing; player_sum = state.player } in
+        let action = policy ?st ~q agent_state in
+        let state = step ?st ~log action state in
+        let q, return = go q state in
+        let q = q |> Agent.update agent_state action return in
+        (q, return)
   in
-  go values state
+  go q state
 
-let iter ?st ?(log = false) ?(values = M.empty) ~n policy =
-  let rec go i values =
-    if i <= 0 then values
+(** Evaluate the action-value function q for this policy. *)
+let evaluate ?st ?(log = false) ?(q = Agent.Q.empty) ~n policy =
+  let rec go i q =
+    if i <= 0 then q
     else
       let () =
         if log then CCFormat.(eprintf "==== Episode %i ====@." (n - i + 1))
       in
-      let values, _ = episode ?st ~log ~values policy in
-      go (i - 1) values
+      let q, _ = episode ?st ~log ~q policy in
+      go (i - 1) q
   in
-  go n values
+  go n q
