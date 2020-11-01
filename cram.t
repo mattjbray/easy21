@@ -23,7 +23,7 @@ Hello
   * stick -> dealer sticks
       dealer: 17 player: 1 (loss)
   update showing:3 sum:1 stick (-1.000) selected:1 0.000 -> -1.000
-  wins:0 (0%) draws:0 (0%) losses:1 (100%) (r:-1.)
+  win rate: 0.0% (after 1 episodes)
   ==== Episode 2 ====
   * dealer draws +8
   * player draws +9
@@ -42,7 +42,7 @@ Hello
       dealer: 22 player: 18 (win)
   update showing:8 sum:18 stick (1.000) selected:1 0.000 -> 1.000
   update showing:8 sum:9 hit (1.000) selected:1 0.000 -> 1.000
-  wins:1 (50%) draws:0 (0%) losses:1 (50%) (r:1.)
+  win rate: 50.0% (after 2 episodes)
   ==== Episode 3 ====
   * dealer draws +9
   * player draws +9
@@ -61,4 +61,4 @@ Hello
   * stick -> dealer sticks
       dealer: 17 player: 9 (loss)
   update showing:9 sum:9 stick (-1.000) selected:1 0.000 -> -1.000
-  wins:1 (33%) draws:0 (0%) losses:2 (67%) (r:-1.)
+  win rate: 33.3% (after 3 episodes)

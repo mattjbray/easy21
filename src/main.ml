@@ -291,22 +291,24 @@ let pp_action_event fmt (action, event) =
   | Agent.Stick, (Event.Player_sticks | Dealer_sticks) -> fprintf fmt "sticks"
   | _ -> fprintf fmt "%a -> %a" Agent.pp_action action Event.pp event
 
-let rec play_out_dealer ?st ?log values state =
+let rec play_out_dealer ?st ?log ?(dealer_policy = Agent.dealer_policy) values
+    state =
   match State.mode state with
   | Sticking ->
       let agent_state = Agent.observe_dealer state in
       let action = Agent.dealer_policy ?st values agent_state in
       let state = Environment.step ?st ?log action state in
-      play_out_dealer ?st ?log values state
+      play_out_dealer ~dealer_policy ?st ?log values state
   | Playing | Finished _ -> state
 
-let step ?st ?log action values state =
+let step ?st ?log ?dealer_policy action values state =
   let state = Environment.step ?st ?log action state in
   match action with
   | Agent.Hit -> state
-  | Stick -> play_out_dealer ?st values state ?log
+  | Stick -> play_out_dealer ?dealer_policy ?st values state ?log
 
-let episode ?st ?log ?(values = Agent.V.empty) (policy : Agent.policy) =
+let episode ?st ?log ?(values = Agent.V.empty) ?dealer_policy
+    (policy : Agent.policy) =
   let state = Environment.start ?st ?log State.make in
   let rec go values state =
     match State.mode state with
@@ -314,7 +316,7 @@ let episode ?st ?log ?(values = Agent.V.empty) (policy : Agent.policy) =
     | _ ->
         let agent_state = Agent.observe_player state in
         let action = policy ?st ?log values agent_state in
-        let state = step ?st ?log action values state in
+        let state = step ?st ?log ?dealer_policy action values state in
         let values, reward = go values state in
         let values = values |> Agent.update ?log agent_state action reward in
         (values, reward)
@@ -322,32 +324,31 @@ let episode ?st ?log ?(values = Agent.V.empty) (policy : Agent.policy) =
   go values state
 
 (** Evaluate the action-value function q for this policy. *)
-let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ~n policy =
-  let rec go i values wins draws losses =
+let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ?dealer_policy ~n
+    policy =
+  let win_rate = ref 0.0 in
+  let rec go i values =
     if i <= 0 then values
     else
+      let n_episodes = n - i + 1 in
       let () =
-        if log then CCFormat.(eprintf "==== Episode %i ====@." (n - i + 1))
+        if log then CCFormat.(eprintf "==== Episode %i ====@." n_episodes)
       in
-      let values, r = episode ?st ~log ~values policy in
-      let wins, draws, losses =
-        if r > 0. then (wins + 1, draws, losses)
-        else if r < 0. then (wins, draws, losses + 1)
-        else (wins, draws + 1, losses)
-      in
+      let values, r = episode ?st ~log ~values ?dealer_policy policy in
       let () =
-        let total = wins + draws + losses in
-        let pp_stat fmt i =
-          CCFormat.(
-            fprintf fmt "%i (%.0f%%)" i
-              ( if total = 0 then 0.
-              else float_of_int i /. float_of_int total *. 100. ))
+        let win = if r > 0. then 1. else 0. in
+        let alpha =
+          (* Switch to exponentially-weighted moving average after 100 episodes *)
+          if n_episodes < 100 then 1. /. float_of_int n_episodes else 0.000001
         in
-
-        CCFormat.(
-          eprintf "wins:%a draws:%a losses:%a (r:%a)@." pp_stat wins pp_stat
-            draws pp_stat losses float r)
+        win_rate := !win_rate +. (alpha *. (win -. !win_rate))
       in
-      go (i - 1) values wins draws losses
+      let () =
+        if log || n_episodes mod (n / 40) = 0 then
+          CCFormat.(
+            eprintf "win rate: %.1f%% (after %i episodes)@." (!win_rate *. 100.)
+              n_episodes)
+      in
+      go (i - 1) values
   in
-  go n values 0 0 0
+  go n values
