@@ -56,5 +56,6 @@ let () =
     |> CCOpt.map_lazy Random.State.make_self_init (fun seed ->
            Random.State.make [| seed |])
   in
-  let vs = evaluate ~st ~log:!verbose ~n:!n (Agent.epsilon_greedy ~n_0:100) in
+  let policy = Agent.epsilon_greedy ~n_0:100 (* Agent.rand_policy *) in
+  let vs = evaluate ~st ~log:!verbose ~n:!n policy in
   match !data_prefix with None -> () | Some pre -> gnuplot pre vs

@@ -105,6 +105,10 @@ module Agent = struct
 
   type state = { other_player_showing : int; my_sum : int }
 
+  let pp_state fmt s =
+    let open CCFormat in
+    fprintf fmt "showing:%i sum:%i" s.other_player_showing s.my_sum
+
   let observe_dealer s =
     { other_player_showing = State.player s; my_sum = State.dealer s }
 
@@ -123,68 +127,81 @@ module Agent = struct
     let compare = Stdlib.compare
   end)
 
-  type q = { visited : int; reward : float }
+  type q = { selected : int; reward : float }
+
+  let make_q = { selected = 0; reward = 0.0 }
 
   type v = { visited : int; qs : q Q.t }
 
+  let make_v = { visited = 0; qs = Q.empty }
+
   type values = v V.t
 
-  let update_q reward = function
-    | None -> Some { visited = 1; reward }
-    | Some { visited; reward = prev_estimate } ->
-        let visited = visited + 1 in
-        Some
-          {
-            visited;
-            reward =
-              prev_estimate
-              +. ((reward -. prev_estimate) /. float_of_int visited);
-          }
+  let update_q ?(log = false) reward q =
+    let { selected; reward = prev_estimate } =
+      match q with None -> make_q | Some q -> q
+    in
+    let selected = selected + 1 in
+    let alpha = 1. /. float_of_int selected in
+    let reward = prev_estimate +. (alpha *. (reward -. prev_estimate)) in
+    ( if log then
+      CCFormat.(
+        eprintf "selected:%i %a -> %a@." selected float3 prev_estimate float3
+          reward) );
+    Some { selected; reward }
 
-  let update_v action reward = function
-    | None ->
-        Some { visited = 1; qs = Q.singleton action { visited = 1; reward } }
-    | Some v ->
-        Some
-          {
-            visited = v.visited + 1;
-            qs = v.qs |> Q.update action (update_q reward);
-          }
+  let update_v ?log action reward v =
+    let v = v |> CCOpt.get_or ~default:make_v in
+    Some
+      {
+        visited = v.visited + 1;
+        qs = v.qs |> Q.update action (update_q ?log reward);
+      }
 
-  let update state action reward vs =
-    vs |> V.update state (update_v action reward)
+  let update ?(log = false) state action reward vs =
+    ( if log then
+      CCFormat.(
+        eprintf "update %a %a (%a) " pp_state state pp_action action float3
+          reward) );
+    vs |> V.update state (update_v ~log action reward)
 
-  type policy = ?st:CCRandom.state -> values -> state -> action
+  type policy = ?st:CCRandom.state -> ?log:bool -> values -> state -> action
 
   let dealer_policy : policy =
-   fun ?st:_ _values state -> if state.my_sum >= 17 then Stick else Hit
+   fun ?st:_ ?log:_ _values state -> if state.my_sum >= 17 then Stick else Hit
 
-  let rand_policy ?st _values _state =
-    CCRandom.(
-      (let+ i = int 3 in
-       if i = 0 then Stick else Hit)
-      |> run ?st)
+  let r_action = CCRandom.(choose_exn (all_actions |> CCList.map pure))
+
+  let rand_policy : policy =
+   fun ?st ?log:_ _values _state -> CCRandom.run ?st r_action
 
   let epsilon_greedy ~n_0 : policy =
-   fun ?st (vs : values) (state : state) ->
-    let v = vs |> V.get_or ~default:{ visited = 0; qs = Q.empty } state in
+   fun ?st ?(log = false) (vs : values) (state : state) ->
+    let v = vs |> V.get_or ~default:make_v state in
     let n_0 = float_of_int n_0 in
     let epsilon = n_0 /. (n_0 +. float_of_int v.visited) in
     let r =
       CCRandom.(
         let* f = float 1. in
-        if f < epsilon then choose_exn (all_actions |> CCList.map pure)
+        if f < epsilon then
+          let () =
+            if log then
+              CCFormat.(eprintf "+ choose random (ε %a)@." float3 epsilon)
+          in
+          choose_exn (all_actions |> CCList.map pure)
         else
+          let () =
+            if log then
+              CCFormat.(eprintf "+ choose greedy (ε %a)@." float3 epsilon)
+          in
           let action_rewards =
             all_actions
             |> CCList.map (fun action ->
-                   ( action,
-                     v.qs
-                     |> Q.get_or ~default:{ visited = 0; reward = 0.0 } action
-                   ))
+                   (action, v.qs |> Q.get_or ~default:make_q action))
           in
           action_rewards
-          |> CCList.sort (fun (_, q1) (_, q2) -> compare q1.reward q2.reward)
+          |> CCList.sort (fun (_, q1) (_, q2) ->
+                 -1 * compare q1.reward q2.reward)
           |> CCList.hd |> fst |> pure)
     in
     CCRandom.run ?st r
@@ -289,32 +306,48 @@ let step ?st ?log action values state =
   | Agent.Hit -> state
   | Stick -> play_out_dealer ?st values state ?log
 
-let episode ?st ?(log = false) ?(values = Agent.V.empty) (policy : Agent.policy)
-    =
-  let state = Environment.start ?st ~log State.make in
-  (* let other_player_showing = state.dealer in *)
+let episode ?st ?log ?(values = Agent.V.empty) (policy : Agent.policy) =
+  let state = Environment.start ?st ?log State.make in
   let rec go values state =
     match State.mode state with
     | Finished _ -> (values, Environment.reward state)
     | _ ->
         let agent_state = Agent.observe_player state in
-        let action = policy ?st values agent_state in
-        let state = step ?st ~log action values state in
-        let values, return = go values state in
-        let values = values |> Agent.update agent_state action return in
-        (values, return)
+        let action = policy ?st ?log values agent_state in
+        let state = step ?st ?log action values state in
+        let values, reward = go values state in
+        let values = values |> Agent.update ?log agent_state action reward in
+        (values, reward)
   in
   go values state
 
 (** Evaluate the action-value function q for this policy. *)
 let evaluate ?st ?(log = false) ?(values = Agent.V.empty) ~n policy =
-  let rec go i values =
+  let rec go i values wins draws losses =
     if i <= 0 then values
     else
       let () =
         if log then CCFormat.(eprintf "==== Episode %i ====@." (n - i + 1))
       in
-      let values, _ = episode ?st ~log ~values policy in
-      go (i - 1) values
+      let values, r = episode ?st ~log ~values policy in
+      let wins, draws, losses =
+        if r > 0. then (wins + 1, draws, losses)
+        else if r < 0. then (wins, draws, losses + 1)
+        else (wins, draws + 1, losses)
+      in
+      let () =
+        let total = wins + draws + losses in
+        let pp_stat fmt i =
+          CCFormat.(
+            fprintf fmt "%i (%.0f%%)" i
+              ( if total = 0 then 0.
+              else float_of_int i /. float_of_int total *. 100. ))
+        in
+
+        CCFormat.(
+          eprintf "wins:%a draws:%a losses:%a (r:%a)@." pp_stat wins pp_stat
+            draws pp_stat losses float r)
+      in
+      go (i - 1) values wins draws losses
   in
-  go n values
+  go n values 0 0 0
